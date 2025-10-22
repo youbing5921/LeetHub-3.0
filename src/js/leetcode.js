@@ -70,6 +70,15 @@ function getTime() {
 
   return `${formattedHours}-${formattedMinutes}-${formattedSeconds}`;
 }
+/* returns the corresponding language from language extension */
+function getLanguageFromExtension(extension) {
+  if (extension === null || extension === undefined) {
+    return null;
+  }
+  const language = Object.keys(languages).find(key => languages[key] === extension);
+  console.log(language);
+  return language || null;
+}
 
 /**
  * Constructs the full GitHub API URL to upload a file to a specific path in the repository.
@@ -80,14 +89,35 @@ function getTime() {
  * @param {string} problem - Problem slug or directory name (e.g., "0001-two-sum").
  * @param {string} filename - Name of the file to upload (e.g., "0001-two-sum.js").
  * @param {boolean} [useDifficultyFolder=true] - Whether to include the difficulty as a subfolder.
+ * @param {boolean} useLanguageFolder - Whether to include the language as a subfolder.
  * @returns {string} Full GitHub API URL for the file upload.
  */
 
-function constructGitHubPath(hook, basePath, difficulty, problem, filename, useDifficultyFolder) {
-  const filePath = problem ? `${problem}/${filename}` : filename;
+function constructGitHubPath(
+  hook,
+  basePath,
+  difficulty,
+  problem,
+  filename,
+  useDifficultyFolder,
+  useLanguageFolder = false,
+) {
+  if (useLanguageFolder) {
+    //split the filename to get the extension
+    const fileExtension = filename.split('.').pop();
+    //get the language from the extension
+    const language = getLanguageFromExtension(`.${fileExtension}`);
+    console.log('Language:', language);
+    if (language) {
+      const path = useDifficultyFolder
+        ? `${language}/${difficulty}/${problem}/${filename}`
+        : `/${language}/${problem}/${filename}`;
+      return `https://api.github.com/repos/${hook}/contents/${path}`;
+    }
+  }
   const path = useDifficultyFolder
-    ? `${basePath}/${difficulty}/${filePath}`
-    : `${filePath}`;
+    ? `${basePath}/${difficulty}/${problem}/${filename}`
+    : `${problem}/${filename}`;
   return `https://api.github.com/repos/${hook}/contents/${path}`;
 }
 
@@ -235,6 +265,7 @@ const upload = (
   commitMsg,
   cb = undefined,
   useDifficultyFolder,
+  useLanguageFolder,
 ) => {
   // const URL = `https://api.github.com/repos/${hook}/contents/${problem}/${filename}`;
   const URL = constructGitHubPath(
@@ -244,6 +275,7 @@ const upload = (
     problem,
     filename,
     useDifficultyFolder,
+    useLanguageFolder,
   );
 
   /* Define Payload */
@@ -335,9 +367,10 @@ const update = (
   shouldPreprendDiscussionPosts,
   cb = undefined,
   useDifficultyFolder,
+  useLanguageFolder,
 ) => {
   let responseSHA;
-  return getUpdatedData(token, hook, problem, filename, useDifficultyFolder)
+  return getUpdatedData(token, hook, problem, filename, useDifficultyFolder, useLanguageFolder)
     .then(data => {
       responseSHA = data.sha;
       return decodeURIComponent(escape(atob(data.content)));
@@ -364,6 +397,7 @@ const update = (
         commitMsg,
         cb,
         useDifficultyFolder,
+        useLanguageFolder,
       ),
     );
 };
@@ -386,6 +420,7 @@ function uploadGit(
   let token;
   let hook;
   let useDifficultyFolder = false;
+  let useLanguageFolder = false;
 
   return chrome.storage.local
     .get('leethub_token')
@@ -411,6 +446,10 @@ function uploadGit(
     })
     .then(result => {
       useDifficultyFolder = result.useDifficultyFolder || false;
+      return chrome.storage.local.get('useLanguageFolder');
+    })
+    .then(result => {
+      useLanguageFolder = result.useLanguageFolder || false;
       return chrome.storage.local.get('stats');
     })
     .then(({ stats }) => {
@@ -428,6 +467,7 @@ function uploadGit(
           commitMsg,
           cb,
           useDifficultyFolder,
+          useLanguageFolder,
         );
       } else if (action === 'update') {
         return update(
@@ -440,12 +480,20 @@ function uploadGit(
           shouldPrependDiscussionPosts,
           cb,
           useDifficultyFolder,
+          useLanguageFolder,
         );
       }
     })
     .catch(err => {
       if (err.message === '409') {
-        return getUpdatedData(token, hook, problemName, fileName, useDifficultyFolder);
+        return getUpdatedData(
+          token,
+          hook,
+          problemName,
+          fileName,
+          useDifficultyFolder,
+          useLanguageFolder,
+        );
       } else {
         throw err;
       }
@@ -462,13 +510,21 @@ function uploadGit(
             commitMsg,
             cb,
             useDifficultyFolder,
+            useLanguageFolder,
           )
         : undefined,
     );
 }
 
 /* Gets updated GitHub data for the specific file in repo in question */
-async function getUpdatedData(token, hook, problem, filename, useDifficultyFolder) {
+async function getUpdatedData(
+  token,
+  hook,
+  problem,
+  filename,
+  useDifficultyFolder,
+  useLanguageFolder,
+) {
   const URL = constructGitHubPath(
     hook,
     basePath,
@@ -476,6 +532,7 @@ async function getUpdatedData(token, hook, problem, filename, useDifficultyFolde
     problem,
     filename,
     useDifficultyFolder,
+    useLanguageFolder,
   );
 
   let options = {
@@ -1484,11 +1541,24 @@ setTimeout(() => {
  */
 async function appendProblemToReadme(topic, markdownFile, hook, problem) {
   const { useDifficultyFolder = false } = await chrome.storage.local.get('useDifficultyFolder');
+  const { useLanguageFolder = false } = await chrome.storage.local.get('useLanguageFolder');
 
-  const filePath = problem ? `${problem}/` : '';
-  const path = useDifficultyFolder
-    ? `${basePath}/${difficulty}/${filePath}`
-    : `${filePath}`;
+  let path = '';
+  if (useLanguageFolder) {
+    const fileExtension = filename.split('.').pop();
+    const language = getLanguageFromExtension(`.${fileExtension}`);
+    console.log('Language:', language);
+    if (language) {
+      const path = useDifficultyFolder
+        ? `${language}/${difficulty}/${problem}/${filename}`
+        : `/${language}/${problem}/${filename}`;
+      path = `https://api.github.com/repos/${hook}/contents/${path}`;
+    }
+  } else {
+    path = useDifficultyFolder
+    ? `${basePath}/${difficulty}/${problem}/${filename}`
+    : `${problem}/${filename}`;
+  }
 
   const url = `https://github.com/${hook}/tree/main/${path}`;
 
